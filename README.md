@@ -15,8 +15,8 @@ A command-line tool for managing multiple Solana wallets and SPL tokens. This to
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/solana-splitter.git
-cd solana-splitter
+git clone https://github.com/yourusername/solm.git
+cd solm
 
 # Install dependencies
 bun install
@@ -32,22 +32,22 @@ bun link
 
 ```bash
 # First time setup - this will prompt for a password to encrypt your wallet files
-solana-splitter init
+solm init
 
 # Generate a new wallet
-solana-splitter wallet generate
+solm wallet generate
 
 # Import wallet from seed phrase
-solana-splitter wallet import-seed
+solm wallet import-seed
 
 # Send SPL tokens
-solana-splitter send --from <WALLET_ADDRESS> --to <RECIPIENT_ADDRESS> --amount <AMOUNT> --token <TOKEN_ADDRESS>
+solm send --from <WALLET_ADDRESS> --to <RECIPIENT_ADDRESS> --amount <AMOUNT> --token <TOKEN_ADDRESS>
 
 # List all wallets
-solana-splitter wallet list
+solm wallet list
 
 # Get wallet balance
-solana-splitter balance <WALLET_ADDRESS>
+solm balance <WALLET_ADDRESS>
 ```
 
 ## Security
