@@ -1,0 +1,31 @@
+{
+  "name": "solm",
+  "version": "1.0.0",
+  "type": "module",
+  "module": "src/index.ts",
+  "description": "A CLI tool for managing multiple Solana wallets and SPL tokens",
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "build": "bun build ./src/index.ts --outdir ./dist --target node",
+    "dev": "bun run --watch src/index.ts",
+    "test": "bun test"
+  },
+  "bin": {
+    "solm": "./dist/index.js"
+  },
+  "dependencies": {
+    "@solana/spl-token": "^0.4.9",
+    "@solana/web3.js": "^1.98.0",
+    "bs58": "^6.0.0",
+    "commander": "^12.1.0",
+    "crypto-js": "^4.2.0",
+    "inquirer": "^12.3.0"
+  },
+  "devDependencies": {
+    "@types/crypto-js": "^4.2.2",
+    "@types/inquirer": "^9.0.7",
+    "@types/node": "^22.10.2",
+    "bun-types": "^1.1.42",
+    "typescript": "^5.7.2"
+  }
+}
