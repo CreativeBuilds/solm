@@ -1,4 +1,4 @@
-# Solana Wallet Splitter CLI
+# Solana Wallet CLI
 
 A command-line tool for managing multiple Solana wallets and SPL tokens. This tool allows you to easily manage multiple wallets, send tokens between them, and interact with external accounts.
 
