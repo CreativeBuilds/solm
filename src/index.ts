@@ -11,7 +11,6 @@ import {
   Transaction,
   PublicKey,
 } from '@solana/web3.js';
-import { randomBytes } from 'crypto';
 
 const program = new Command();
 const walletService = new WalletService();
@@ -157,6 +156,29 @@ program
       const password = await promptWalletPassword(fromWallet.name);
       walletService.setPasswordForWallet(options.from, password);
 
+      // Show transaction summary
+      console.log('\nTransaction Summary:');
+      console.log(`From: ${fromWallet.name || fromWallet.publicKey}`);
+      console.log(`To: ${options.to}`);
+      console.log(`Amount: ${options.amount} tokens`);
+      console.log(`Token: ${options.token}`);
+
+      // Ask for confirmation
+      const { confirm } = await inquirer.prompt([
+        {
+          type: 'confirm',
+          name: 'confirm',
+          message: `\nDo you want to send ${options.amount} tokens to ${options.to}?`,
+          default: false,
+        },
+      ]);
+
+      if (!confirm) {
+        console.log('Transaction cancelled by user');
+        walletService.clearPasswordForWallet(options.from);
+        return;
+      }
+
       const fromKeypair = await walletService.getKeypair(options.from);
       const signature = await tokenService.transfer(
         fromKeypair,
@@ -172,6 +194,7 @@ program
       console.log(`Signature: ${signature}`);
     } catch (error) {
       console.error('Error sending tokens:', error);
+      walletService.clearPasswordForWallet(options.from);
     }
   });
 
