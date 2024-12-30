@@ -245,6 +245,56 @@ walletCommand
     }
   });
 
+walletCommand
+  .command('reindex')
+  .description('Reindex all wallets sequentially')
+  .action(async () => {
+    try {
+      console.log(chalk.bold('\nReindexing wallets...'));
+      
+      let lastProgress = 0;
+      await walletService.reindexWallets((current, total) => {
+        // Update progress every 10%
+        const progress = Math.floor((current / total) * 100);
+        if (progress >= lastProgress + 10) {
+          process.stdout.write(`${chalk.yellow('→')} Progress: ${progress}%\r`);
+          lastProgress = progress;
+        }
+      });
+      
+      // Clear the progress line
+      process.stdout.write('\r' + ' '.repeat(50) + '\r');
+      
+      // Show the reindexed wallets
+      const wallets = await walletService.listWallets();
+      
+      console.log(formatHeader('\nWallets Reindexed'));
+      const table = createTable(['#', 'Public Key', 'Name', 'Tags']);
+      
+      wallets.forEach(wallet => {
+        table.push([
+          chalk.yellow(wallet.index.toString()),
+          formatAddress(wallet.publicKey),
+          wallet.name ? formatName(wallet.name) : '',
+          wallet.tags?.length ? formatTags(wallet.tags) : ''
+        ]);
+      });
+
+      console.log(table.toString());
+      console.log(formatSuccess(`\nAll wallets have been reindexed successfully (${wallets.length} total)`));
+    } catch (error: any) {
+      console.error(formatError('Error reindexing wallets:'), error?.message || error);
+    }
+  })
+  .addHelpText('after', `
+${formatHeader('Examples:')}
+  ${chalk.gray('$')} ${chalk.green('solm')} wallet reindex     ${chalk.gray('# Reindex all wallets sequentially')}
+
+${formatHeader('Note:')}
+  ${chalk.gray('•')} This command will reassign indices to all wallets based on their creation order
+  ${chalk.gray('•')} Use this to fix any index conflicts or missing indices
+  `);
+
 program
   .command('send')
   .description('Send SOL or SPL tokens to another wallet')
