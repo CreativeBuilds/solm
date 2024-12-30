@@ -299,8 +299,8 @@ program
   .action(async (options) => {
     try {
       const sourceWallet = await walletService.getWallet(options.from);
-      const password = await promptWalletPassword(sourceWallet.name);
-      walletService.setPasswordForWallet(options.from, password);
+      const sourcePassword = await promptWalletPassword(sourceWallet.name);
+      walletService.setPasswordForWallet(options.from, sourcePassword);
 
       const totalAmount = parseFloat(options.amount);
       const targetCount = parseInt(options.count);
@@ -314,6 +314,13 @@ program
       // Calculate how many new wallets we need
       const walletsNeeded = Math.max(0, targetCount - existingWallets.length);
       const totalWalletsAfterGeneration = existingWallets.length + walletsNeeded;
+
+      // If we need to generate wallets, ask for the password up front
+      let newWalletsPassword: string | undefined;
+      if (walletsNeeded > 0) {
+        console.log(`\nYou will need to set a password for the ${walletsNeeded} new wallets that will be generated.`);
+        newWalletsPassword = await promptNewPassword('new wallets');
+      }
 
       // Generate distribution based on variance
       const individualAmounts = generateRandomDistribution(
@@ -364,13 +371,12 @@ program
       }
       
       // Generate new wallets if needed
-      if (walletsNeeded > 0) {
+      if (walletsNeeded > 0 && newWalletsPassword) {
         console.log(`\nGenerating ${walletsNeeded} new wallets...`);
-        const walletPassword = await promptNewPassword('new wallets');
         
         for (let i = 0; i < walletsNeeded; i++) {
           const walletName = `${options.prefix}-${existingWallets.length + i + 1}`;
-          await walletService.generateWallet(walletPassword, walletName);
+          await walletService.generateWallet(newWalletsPassword, walletName);
           process.stdout.write('.');
         }
         console.log('\nNew wallets generated successfully!');
