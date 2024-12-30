@@ -3,14 +3,6 @@ import { Command } from 'commander';
 import inquirer from 'inquirer';
 import { WalletService } from './services/WalletService';
 import { TokenService } from './services/TokenService';
-import bs58 from 'bs58';
-import {
-  Connection,
-  LAMPORTS_PER_SOL,
-  SystemProgram,
-  Transaction,
-  PublicKey,
-} from '@solana/web3.js';
 
 const program = new Command();
 const walletService = new WalletService();
@@ -71,138 +63,141 @@ program
 // Create a wallet command group
 const walletCommand = program
   .command('wallet')
+  .alias('w')
   .description('Wallet management commands');
 
 walletCommand
   .command('generate')
-  .description('Generate a new wallet')
-  .option('-n, --name <name>', 'Name for the wallet')
+  .description('Generate a new Solana wallet')
+  .option('-n, --name <name>', 'Optional name for the wallet')
+  .addHelpText('after', `
+Examples:
+  $ solm wallet generate                    # Generate a wallet with auto-generated name
+  $ solm wallet generate -n "my-wallet"     # Generate a wallet named "my-wallet"
+  `);
+
+walletCommand
+  .command('import-seed')
+  .description('Import a wallet from base58 encoded seed phrase')
+  .option('-n, --name <name>', 'Optional name for the wallet')
+  .addHelpText('after', `
+Examples:
+  $ solm wallet import-seed                 # Import wallet and prompt for seed phrase
+  $ solm wallet import-seed -n "imported"   # Import wallet with name "imported"
+  `);
+
+// Add helper function for parsing tags
+function parseTags(tagString?: string): string[] | undefined {
+  if (!tagString) return undefined;
+  return tagString.split(',')
+    .map((t: string) => t.trim())
+    .filter((t: string) => t);
+}
+
+walletCommand
+  .command('tag')
+  .description('Add tags to a wallet')
+  .requiredOption('--wallet <address>', 'Wallet address to tag')
+  .requiredOption('--tags <tags>', 'Comma-separated list of tags')
   .action(async (options) => {
-    const password = await promptNewPassword(options.name);
-    const wallet = await walletService.generateWallet(password, options.name);
-    console.log('Wallet generated successfully:');
-    console.log(`Public Key: ${wallet.publicKey}`);
-    if (wallet.name) {
-      console.log(`Name: ${wallet.name}`);
+    try {
+      const tags = parseTags(options.tags);
+      if (!tags || tags.length === 0) {
+        console.error('No valid tags provided');
+        return;
+      }
+      const wallet = await walletService.addTags(options.wallet, tags);
+      console.log(`\nTags added to wallet ${wallet.name || wallet.publicKey}:`);
+      console.log(wallet.tags?.join(', ') || 'No tags');
+    } catch (error: any) {
+      console.error('Error adding tags:', error?.message || error);
     }
   });
 
 walletCommand
-  .command('import-seed')
-  .description('Import a wallet from seed phrase')
-  .option('-n, --name <name>', 'Name for the wallet')
+  .command('untag')
+  .description('Remove tags from a wallet')
+  .requiredOption('--wallet <address>', 'Wallet address')
+  .requiredOption('--tags <tags>', 'Comma-separated list of tags to remove')
   .action(async (options) => {
-    const { seedPhrase } = await inquirer.prompt([
-      {
-        type: 'password',
-        name: 'seedPhrase',
-        message: 'Enter your seed phrase:',
-      },
-    ]);
-
-    const password = await promptNewPassword(options.name);
-
     try {
-      const secretKey = bs58.decode(seedPhrase);
-      const wallet = await walletService.importWallet(secretKey, password, options.name);
-      console.log('Wallet imported successfully:');
-      console.log(`Public Key: ${wallet.publicKey}`);
-      if (wallet.name) {
-        console.log(`Name: ${wallet.name}`);
+      const tags = parseTags(options.tags);
+      if (!tags || tags.length === 0) {
+        console.error('No valid tags provided');
+        return;
       }
-    } catch (error) {
-      console.error('Error importing wallet:', error);
+      const wallet = await walletService.removeTags(options.wallet, tags);
+      console.log(`\nRemaining tags for wallet ${wallet.name || wallet.publicKey}:`);
+      console.log(wallet.tags?.join(', ') || 'No tags');
+    } catch (error: any) {
+      console.error('Error removing tags:', error?.message || error);
     }
   });
 
 walletCommand
   .command('list')
-  .description('List all wallets')
-  .action(async () => {
-    const wallets = await walletService.listWallets();
-    console.log('Your wallets:');
-    wallets.forEach(wallet => {
-      console.log(`\nPublic Key: ${wallet.publicKey}`);
-      if (wallet.name) {
-        console.log(`Name: ${wallet.name}`);
-      }
-    });
+  .alias('ls')
+  .description('List all managed wallets')
+  .option('--tags <tags>', 'Filter by comma-separated tags (e.g., "hot,trading")')
+  .action(async (options) => {
+    try {
+      const filterTags = parseTags(options.tags);
+      const wallets = await walletService.listWallets(filterTags);
+      console.log('Your wallets:');
+      wallets.forEach(wallet => {
+        console.log(`\nPublic Key: ${wallet.publicKey}`);
+        if (wallet.name) {
+          console.log(`Name: ${wallet.name}`);
+        }
+        if (wallet.tags && wallet.tags.length > 0) {
+          console.log(`Tags: ${wallet.tags.join(', ')}`);
+        }
+      });
+    } catch (error: any) {
+      console.error('Error listing wallets:', error?.message || error);
+    }
   });
 
 program
   .command('send')
-  .description('Send SPL tokens')
-  .requiredOption('--from <address>', 'Sender wallet address')
+  .description('Send SOL or SPL tokens to another wallet')
+  .requiredOption('--from <address>', 'Source wallet address')
   .requiredOption('--to <address>', 'Recipient wallet address')
-  .requiredOption('--amount <amount>', 'Amount to send')
+  .requiredOption('--amount <number>', 'Amount to send')
   .requiredOption('--token <address>', 'Token mint address')
-  .action(async (options) => {
-    try {
-      const fromWallet = await walletService.getWallet(options.from);
-      const password = await promptWalletPassword(fromWallet.name);
-      walletService.setPasswordForWallet(options.from, password);
+  .addHelpText('after', `
+Examples:
+  # Send SPL tokens
+  $ solm send --from <WALLET> --to <RECIPIENT> --amount 100 --token <MINT>
 
-      // Show transaction summary
-      console.log('\nTransaction Summary:');
-      console.log(`From: ${fromWallet.name || fromWallet.publicKey}`);
-      console.log(`To: ${options.to}`);
-      console.log(`Amount: ${options.amount} tokens`);
-      console.log(`Token: ${options.token}`);
-
-      // Ask for confirmation
-      const { confirm } = await inquirer.prompt([
-        {
-          type: 'confirm',
-          name: 'confirm',
-          message: `\nDo you want to send ${options.amount} tokens to ${options.to}?`,
-          default: false,
-        },
-      ]);
-
-      if (!confirm) {
-        console.log('Transaction cancelled by user');
-        walletService.clearPasswordForWallet(options.from);
-        return;
-      }
-
-      const fromKeypair = await walletService.getKeypair(options.from);
-      const signature = await tokenService.transfer(
-        fromKeypair,
-        options.to,
-        options.token,
-        parseInt(options.amount)
-      );
-
-      // Clear the password from memory after use
-      walletService.clearPasswordForWallet(options.from);
-      
-      console.log('Transaction successful!');
-      console.log(`Signature: ${signature}`);
-    } catch (error) {
-      console.error('Error sending tokens:', error);
-      walletService.clearPasswordForWallet(options.from);
-    }
-  });
+Note:
+  - Amount is in token units (e.g., 1.0 = 1 token)
+  - Token account will be auto-created for recipient if needed
+  `);
 
 // Create a balance command group
 const balanceCommand = program
   .command('balance')
-  .description('Balance management commands');
+  .alias('b')
+  .description('Balance checking commands');
 
 balanceCommand
   .command('list')
+  .alias('ls')
   .description('List balances for all wallets')
-  .option('--token <address>', 'Token mint address')
+  .option('--token <address>', 'Filter by specific token mint address')
+  .option('--tags <tags>', 'Filter by comma-separated tags (e.g., "hot,trading")')
   .action(async (options) => {
     try {
-      const wallets = await walletService.listWallets();
+      const filterTags = parseTags(options.tags);
+      const wallets = await walletService.listWallets(filterTags);
       
       if (wallets.length === 0) {
-        console.log('No wallets found. Use `solm wallet generate` to create one.');
+        console.log('No wallets found matching the specified tags.');
         return;
       }
 
-      console.log('Fetching balances for all wallets...');
+      console.log('Fetching balances for wallets...');
       const walletAddresses = wallets.map(w => w.publicKey);
       const balances = await tokenService.getWalletBalances(walletAddresses);
       
@@ -211,6 +206,9 @@ balanceCommand
         const balance = balances.get(wallet.publicKey);
         if (balance) {
           console.log(`\nWallet: ${wallet.name || wallet.publicKey}`);
+          if (wallet.tags && wallet.tags.length > 0) {
+            console.log(`Tags: ${wallet.tags.join(', ')}`);
+          }
           console.log(`SOL Balance: ${balance.solBalance.toFixed(4)} SOL`);
           
           if (balance.tokens.length === 0) {
@@ -224,264 +222,87 @@ balanceCommand
           }
         }
       });
-    } catch (error) {
-      console.error('Error getting balances:', error);
+    } catch (error: any) {
+      console.error('Error getting balances:', error?.message || error);
     }
   });
 
 balanceCommand
   .command('get <address>')
   .description('Get balance for a specific wallet')
-  .option('--token <address>', 'Token mint address')
-  .action(async (address, options) => {
-    try {
-      if (options.token) {
-        const balance = await tokenService.getTokenBalance(address, options.token);
-        console.log(`Token Balance: ${balance}`);
-      } else {
-        const balances = await tokenService.getWalletBalances([address]);
-        const balance = balances.get(address);
-        
-        if (balance) {
-          console.log(`SOL Balance: ${balance.solBalance.toFixed(4)} SOL`);
-          
-          if (balance.tokens.length === 0) {
-            console.log('No token accounts found');
-          } else {
-            console.log('\nToken Accounts:');
-            balance.tokens.forEach(token => {
-              console.log(`Mint: ${token.mint}`);
-              console.log(`Balance: ${token.uiAmount.toFixed(token.decimals)} (${token.decimals} decimals)`);
-            });
-          }
-        }
-      }
-    } catch (error) {
-      console.error('Error getting balance:', error);
-    }
-  });
-
-// Add this helper function for generating random distributions
-function generateRandomDistribution(count: number, total: number, variance: number): number[] {
-  // Generate random numbers from normal distribution
-  const generateGaussian = () => {
-    // Box-Muller transform for normal distribution
-    const u1 = Math.random();
-    const u2 = Math.random();
-    const z = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
-    return z;
-  };
-
-  // Generate initial random values
-  const values = Array.from({ length: count }, () => {
-    const base = total / count;
-    const randomFactor = generateGaussian() * variance;
-    return Math.max(base * (1 + randomFactor), base * 0.1); // Ensure minimum 10% of base
-  });
-
-  // Calculate the sum and adjust to match total
-  const sum = values.reduce((a, b) => a + b, 0);
-  const scaleFactor = total / sum;
-  
-  // Scale all values to match the desired total
-  return values.map(v => v * scaleFactor);
-}
-
-program
-  .command('spread')
-  .description('Spread SOL or SPL tokens from one wallet to multiple wallets, generating new ones if needed')
-  .requiredOption('--from <address>', 'Source wallet address')
-  .requiredOption('--amount <amount>', 'Amount to spread in total')
-  .requiredOption('--count <number>', 'Number of wallets to spread to')
-  .option('--token <address>', 'Token mint address (if spreading SPL tokens)')
-  .option('--prefix <string>', 'Name prefix for generated wallets', 'wallet')
-  .option('--variance <number>', 'Variance factor (0-1, where 0 means equal distribution and 1 means high variance)', '0')
-  .action(async (options) => {
-    try {
-      const sourceWallet = await walletService.getWallet(options.from);
-      const sourcePassword = await promptWalletPassword(sourceWallet.name);
-      walletService.setPasswordForWallet(options.from, sourcePassword);
-
-      const totalAmount = parseFloat(options.amount);
-      const targetCount = parseInt(options.count);
-      const variance = Math.max(0, Math.min(1, parseFloat(options.variance))); // Clamp between 0 and 1
-      const isSPLTransfer = !!options.token;
-      
-      // Get existing wallets excluding source wallet
-      const existingWallets = (await walletService.listWallets())
-        .filter(w => w.publicKey !== sourceWallet.publicKey);
-      
-      // Calculate how many new wallets we need
-      const walletsNeeded = Math.max(0, targetCount - existingWallets.length);
-      const totalWalletsAfterGeneration = existingWallets.length + walletsNeeded;
-
-      // If we need to generate wallets, ask for the password up front
-      let newWalletsPassword: string | undefined;
-      if (walletsNeeded > 0) {
-        console.log(`\nYou will need to set a password for the ${walletsNeeded} new wallets that will be generated.`);
-        newWalletsPassword = await promptNewPassword('new wallets');
-      }
-
-      // Generate distribution based on variance
-      const individualAmounts = generateRandomDistribution(
-        totalWalletsAfterGeneration,
-        totalAmount * (isSPLTransfer ? 1 : LAMPORTS_PER_SOL),
-        variance
-      );
-
-      // Check minimum amounts
-      if (isSPLTransfer) {
-        console.log(`\nSpreading ${totalAmount} tokens of ${options.token} across ${totalWalletsAfterGeneration} wallets with ${variance * 100}% variance`);
-      } else {
-        const minAmount = Math.min(...individualAmounts) / LAMPORTS_PER_SOL;
-        if (minAmount < 0.001) {
-          console.error('Some amounts are too small. Minimum is 0.001 SOL');
-          return;
-        }
-        console.log(`\nSpreading ${totalAmount} SOL across ${totalWalletsAfterGeneration} wallets with ${variance * 100}% variance`);
-      }
-
-      // Log distribution statistics
-      const minAmount = isSPLTransfer ? Math.min(...individualAmounts) : Math.min(...individualAmounts) / LAMPORTS_PER_SOL;
-      const maxAmount = isSPLTransfer ? Math.max(...individualAmounts) : Math.max(...individualAmounts) / LAMPORTS_PER_SOL;
-      const avgAmount = isSPLTransfer ? totalAmount / totalWalletsAfterGeneration : totalAmount / totalWalletsAfterGeneration;
-      
-      console.log('\nDistribution Summary:');
-      console.log(`Source wallet: ${sourceWallet.name || sourceWallet.publicKey}`);
-      console.log(`Total amount: ${totalAmount}${isSPLTransfer ? ' tokens' : ' SOL'}`);
-      console.log(`Number of destination wallets: ${totalWalletsAfterGeneration}`);
-      console.log(`New wallets to be created: ${walletsNeeded}`);
-      console.log(`Distribution range: ${minAmount.toFixed(4)} to ${maxAmount.toFixed(4)} (avg: ${avgAmount.toFixed(4)})`);
-      console.log(`Variance factor: ${(variance * 100).toFixed(1)}%`);
-      
-      // Ask for confirmation
-      const { confirm } = await inquirer.prompt([
-        {
-          type: 'confirm',
-          name: 'confirm',
-          message: `\nThis operation will ${walletsNeeded > 0 ? `create ${walletsNeeded} new wallets and ` : ''}distribute ${totalAmount}${isSPLTransfer ? ' tokens' : ' SOL'} across ${totalWalletsAfterGeneration} wallets. Continue?`,
-          default: false,
-        },
-      ]);
-
-      if (!confirm) {
-        console.log('Operation cancelled by user');
-        walletService.clearPasswordForWallet(options.from);
-        return;
-      }
-      
-      // Generate new wallets if needed
-      if (walletsNeeded > 0 && newWalletsPassword) {
-        console.log(`\nGenerating ${walletsNeeded} new wallets...`);
-        
-        for (let i = 0; i < walletsNeeded; i++) {
-          const walletName = `${options.prefix}-${existingWallets.length + i + 1}`;
-          await walletService.generateWallet(newWalletsPassword, walletName);
-          process.stdout.write('.');
-        }
-        console.log('\nNew wallets generated successfully!');
-      }
-
-      // Get updated list of wallets (excluding source)
-      const destinationWallets = (await walletService.listWallets())
-        .filter(w => w.publicKey !== sourceWallet.publicKey);
-      
-      const sourceKeypair = await walletService.getKeypair(options.from);
-      const connection = new Connection(tokenService.getEndpoint(), 'confirmed');
-      
-      // Process in batches of 10 to avoid rate limits
-      const batchSize = 10;
-      console.log('\nSending to wallets...');
-
-      for (let i = 0; i < destinationWallets.length; i += batchSize) {
-        const batch = destinationWallets.slice(i, Math.min(i + batchSize, destinationWallets.length));
-        const transferPromises = batch.map(async (wallet, batchIndex) => {
-          const amount = individualAmounts[i + batchIndex];
-          try {
-            if (isSPLTransfer) {
-              // For SPL tokens, use the TokenService transfer method
-              const signature = await tokenService.transfer(
-                sourceKeypair,
-                wallet.publicKey,
-                options.token,
-                Math.floor(amount)
-              );
-              return { wallet, amount, success: true, signature, isSPL: true };
-            } else {
-              // For SOL, use SystemProgram transfer
-              const transaction = new Transaction().add(
-                SystemProgram.transfer({
-                  fromPubkey: sourceKeypair.publicKey,
-                  toPubkey: new PublicKey(wallet.publicKey),
-                  lamports: Math.floor(amount),
-                })
-              );
-
-              const signature = await connection.sendTransaction(transaction, [sourceKeypair]);
-              await connection.confirmTransaction(signature);
-              return { wallet, amount, success: true, signature, isSPL: false };
-            }
-          } catch (error) {
-            return { wallet, amount, success: false, error, isSPL: isSPLTransfer };
-          }
-        });
-
-        const results = await Promise.all(transferPromises);
-        
-        // Log results for this batch
-        results.forEach(result => {
-          if (result.success) {
-            const displayAmount = result.isSPL 
-              ? `${(result.amount / Math.pow(10, 9)).toFixed(9)} tokens`  // Assuming 9 decimals for SPL tokens
-              : `${(result.amount / LAMPORTS_PER_SOL).toFixed(4)} SOL`;
-            console.log(`✓ Sent ${displayAmount} to ${result.wallet.name || result.wallet.publicKey}`);
-          } else {
-            console.error(`✗ Failed to send to ${result.wallet.name || result.wallet.publicKey}: ${result.error}`);
-          }
-        });
-      }
-
-      // Clear the password from memory
-      walletService.clearPasswordForWallet(options.from);
-      
-      console.log('\nSpread operation completed!');
-    } catch (error) {
-      console.error('Error spreading tokens:', error);
-    }
-  });
+  .option('--token <address>', 'Filter by specific token mint address')
+  .addHelpText('after', `
+Examples:
+  $ solm balance get <WALLET>               # Show SOL and token balances for wallet
+  $ solm balance get <WALLET> --token <MINT># Show specific token balance for wallet
+  `);
 
 program
   .command('deposit')
-  .description('Get deposit address for a token')
+  .description('Get deposit address for receiving tokens')
   .requiredOption('--wallet <address>', 'Wallet address to receive tokens')
   .requiredOption('--token <address>', 'Token mint address')
-  .action(async (options) => {
-    try {
-      // First verify the wallet exists
-      const wallet = await walletService.getWallet(options.wallet);
-      console.log('\nGenerating deposit address...');
-      console.log(`Wallet: ${wallet.name || wallet.publicKey}`);
-      console.log(`Token: ${options.token}`);
+  .addHelpText('after', `
+Examples:
+  $ solm deposit --wallet <WALLET> --token <MINT>
 
-      const depositInfo = await tokenService.getDepositAddress(options.wallet, options.token);
-      
-      console.log('\nDeposit Information:');
-      console.log(`Address: ${depositInfo.address}`);
-      if (!depositInfo.exists) {
-        console.log(`Note: This token account doesn't exist yet. The first deposit will need to include ${depositInfo.rent / LAMPORTS_PER_SOL} SOL for rent.`);
-      } else {
-        console.log('Token account is already initialized and ready to receive tokens.');
-      }
-      
-      // Show QR code if requested (future enhancement)
-      
-    } catch (error: any) {
-      if (error?.message?.includes('Wallet not found')) {
-        console.error('Error: Wallet not found. Please check the address and try again.');
-      } else {
-        console.error('Error getting deposit address:', error?.message || error);
-      }
-    }
-  });
+Note:
+  - Shows the Associated Token Account (ATA) address for receiving tokens
+  - Indicates if account needs to be created and required rent
+  `);
+
+program
+  .command('spread')
+  .description('Spread SOL or SPL tokens across multiple wallets')
+  .requiredOption('--from <address>', 'Source wallet address')
+  .requiredOption('--amount <number>', 'Total amount to spread')
+  .requiredOption('--count <number>', 'Number of destination wallets')
+  .option('--token <address>', 'Token mint address (if spreading SPL tokens)')
+  .option('--prefix <string>', 'Name prefix for generated wallets', 'wallet')
+  .option('--variance <number>', 'Distribution variance factor (0-1)', '0')
+  .option('--tags <tags>', 'Comma-separated tags to apply to new wallets')
+  .addHelpText('after', `
+Examples:
+  # Spread SOL evenly
+  $ solm spread --from <WALLET> --amount 10 --count 5
+
+  # Spread tokens with variance and tags
+  $ solm spread --from <WALLET> --amount 1000 --count 100 --token <MINT> --variance 0.5 --tags "batch1,test"
+
+  # Spread with custom wallet naming and tags
+  $ solm spread --from <WALLET> --amount 10 --count 5 --prefix "test-wallet" --tags "test,automated"
+
+Notes:
+  - If count exceeds existing wallets, new ones will be generated
+  - Variance of 0 means equal distribution
+  - Variance of 1 means high randomization
+  - Minimum SOL amount per wallet is 0.001
+  - Token accounts are auto-created for recipients
+  - Tags will be applied to newly generated wallets only
+  `);
+
+program.addHelpText('after', `
+Environment Variables:
+  NODE_NO_WARNINGS=1     Suppress Node.js warnings
+
+Examples:
+  # Generate a new wallet
+  $ solm wallet generate -n "my-wallet"
+
+  # Check balances
+  $ solm balance list
+
+  # Send tokens
+  $ solm send --from <WALLET> --to <RECIPIENT> --amount 100 --token <MINT>
+
+  # Spread tokens
+  $ solm spread --from <WALLET> --amount 1000 --count 100 --token <MINT>
+
+For more info, run any command with the --help flag:
+  $ solm wallet --help
+  $ solm balance --help
+  $ solm send --help
+  $ solm spread --help
+`);
 
 program.parse(); 

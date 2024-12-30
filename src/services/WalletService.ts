@@ -42,7 +42,7 @@ export class WalletService {
     this.passwordCache.delete(publicKey);
   }
 
-  public async generateWallet(password: string, name?: string): Promise<WalletInfo> {
+  public async generateWallet(password: string, name?: string, tags?: string[]): Promise<WalletInfo> {
     const keypair = Keypair.generate();
     const salt = this.generateSalt();
     const walletInfo: WalletInfo = {
@@ -50,13 +50,14 @@ export class WalletService {
       encryptedPrivateKey: encrypt(bs58.encode(keypair.secretKey), password + salt),
       name,
       salt,
+      tags: tags ? tags.map(t => t.trim().toLowerCase()) : [],
     };
 
     await this.saveWallet(walletInfo);
     return walletInfo;
   }
 
-  public async importWallet(secretKey: Uint8Array, password: string, name?: string): Promise<WalletInfo> {
+  public async importWallet(secretKey: Uint8Array, password: string, name?: string, tags?: string[]): Promise<WalletInfo> {
     const keypair = Keypair.fromSecretKey(secretKey);
     const salt = this.generateSalt();
     const walletInfo: WalletInfo = {
@@ -64,6 +65,7 @@ export class WalletService {
       encryptedPrivateKey: encrypt(bs58.encode(keypair.secretKey), password + salt),
       name,
       salt,
+      tags: tags ? tags.map(t => t.trim().toLowerCase()) : [],
     };
 
     await this.saveWallet(walletInfo);
@@ -80,7 +82,7 @@ export class WalletService {
     }
   }
 
-  public async listWallets(): Promise<Omit<WalletInfo, 'encryptedPrivateKey' | 'salt'>[]> {
+  public async listWallets(filterTags?: string[]): Promise<Omit<WalletInfo, 'encryptedPrivateKey' | 'salt'>[]> {
     try {
       const files = await fs.readdir(this.accountsDir);
       const wallets = await Promise.all(
@@ -93,10 +95,19 @@ export class WalletService {
             return {
               publicKey: wallet.publicKey,
               name: wallet.name,
-              tags: wallet.tags,
+              tags: wallet.tags || [],
             };
           })
       );
+
+      // Filter by tags if specified
+      if (filterTags && filterTags.length > 0) {
+        const requiredTags = new Set(filterTags.map(t => t.trim().toLowerCase()));
+        return wallets.filter(wallet => 
+          wallet.tags.some((tag: string) => requiredTags.has(tag.toLowerCase()))
+        );
+      }
+
       return wallets;
     } catch (error) {
       console.error('Error listing wallets:', error);
@@ -123,5 +134,29 @@ export class WalletService {
   private async saveWallet(walletInfo: WalletInfo): Promise<void> {
     const walletPath = path.join(this.accountsDir, `${walletInfo.publicKey}.json`);
     await fs.writeFile(walletPath, JSON.stringify(walletInfo, null, 2));
+  }
+
+  public async addTags(publicKey: string, tags: string[]): Promise<WalletInfo> {
+    const wallet = await this.getWallet(publicKey);
+    const uniqueTags = new Set(wallet.tags || []);
+    tags.forEach(tag => uniqueTags.add(tag.trim().toLowerCase()));
+    wallet.tags = Array.from(uniqueTags);
+    await this.saveWallet(wallet);
+    return wallet;
+  }
+
+  public async removeTags(publicKey: string, tags: string[]): Promise<WalletInfo> {
+    const wallet = await this.getWallet(publicKey);
+    if (!wallet.tags) return wallet;
+
+    if (tags.includes('*')) {
+      wallet.tags = [];
+    } else {
+      const tagsToRemove = new Set(tags.map(t => t.trim().toLowerCase()));
+      wallet.tags = wallet.tags.filter(tag => !tagsToRemove.has(tag));
+    }
+    
+    await this.saveWallet(wallet);
+    return wallet;
   }
 } 
