@@ -59,6 +59,10 @@ export class WalletService {
     return customPath || process.env.SOLM_PATH || WalletService.getDefaultPath();
   }
 
+  public getBasePath(): string {
+    return this.baseDir;
+  }
+
   constructor(customPath?: string) {
     this.baseDir = WalletService.resolvePath(customPath);
     this.accountsDir = path.join(this.baseDir, 'accounts');
@@ -104,6 +108,13 @@ export class WalletService {
     // Check for existing wallet with this name (case-insensitive)
     const existingAddress = this.walletMap.wallets[normalizedName];
     if (existingAddress) {
+      throw new Error(`A wallet with the name "${name}" already exists`);
+    }
+
+    // Also check all wallet files for the name
+    const wallets = await this.listWallets();
+    const nameExists = wallets.some(w => w.name && this.normalizeName(w.name) === normalizedName);
+    if (nameExists) {
       throw new Error(`A wallet with the name "${name}" already exists`);
     }
   }

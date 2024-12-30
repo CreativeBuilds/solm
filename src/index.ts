@@ -5,6 +5,7 @@ import { WalletService } from './services/WalletService';
 import { TokenService } from './services/TokenService';
 import chalk from 'chalk';
 import Table from 'cli-table3';
+import path from 'path';
 
 const program = new Command();
 
@@ -96,19 +97,30 @@ walletCommand
   .action(async (options) => {
     try {
       const name = options.name || undefined;
+      
+      // Validate name availability first
+      if (name) {
+        const wallets = await walletService.listWallets();
+        const nameExists = wallets.some(w => w.name && w.name.toLowerCase() === name.toLowerCase());
+        if (nameExists) {
+          console.error(formatError(`A wallet with the name "${name}" already exists`));
+          console.log(chalk.gray('\nTip: Choose a different name or use the wallet list command to see existing wallets'));
+          process.exit(1);
+        }
+      }
+      
       const password = await promptNewPassword(name);
       const wallet = await walletService.generateWallet(name, password);
       
       console.log(formatHeader('\nWallet Generated'));
-      const table = createTable(['Field', 'Value']);
-      
-      table.push(
-        ['Public Key', formatAddress(wallet.publicKey)],
-        ['Name', wallet.name ? formatName(wallet.name) : chalk.gray('(none)')],
-        ['Tags', wallet.tags?.length ? formatTags(wallet.tags) : chalk.gray('(none)')]
-      );
-
-      console.log(table.toString());
+      console.log(`${chalk.bold('Public Key:')}  ${formatAddress(wallet.publicKey)}`);
+      if (wallet.name) {
+        console.log(`${chalk.bold('Name:')}       ${formatName(wallet.name)}`);
+      }
+      if (wallet.tags?.length) {
+        console.log(`${chalk.bold('Tags:')}       ${formatTags(wallet.tags)}`);
+      }
+      console.log(`${chalk.bold('Storage:')}    ${chalk.gray(path.join(walletService.getBasePath(), 'accounts'))}`);
       console.log(formatSuccess('\nWallet has been encrypted and saved'));
     } catch (error: any) {
       console.error(formatError('Error generating wallet:'), error?.message || error);
@@ -128,6 +140,17 @@ walletCommand
     try {
       const name = options.name || undefined;
       
+      // Validate name availability first
+      if (name) {
+        const wallets = await walletService.listWallets();
+        const nameExists = wallets.some(w => w.name && w.name.toLowerCase() === name.toLowerCase());
+        if (nameExists) {
+          console.error(formatError(`A wallet with the name "${name}" already exists`));
+          console.log(chalk.gray('\nTip: Choose a different name or use the wallet list command to see existing wallets'));
+          process.exit(1);
+        }
+      }
+      
       // Prompt for seed phrase
       const { seedPhrase } = await inquirer.prompt({
         type: 'password',
@@ -143,15 +166,14 @@ walletCommand
       const wallet = await walletService.importWallet(name, password, seedPhrase);
       
       console.log(formatHeader('\nWallet Imported'));
-      const table = createTable(['Field', 'Value']);
-      
-      table.push(
-        ['Public Key', formatAddress(wallet.publicKey)],
-        ['Name', wallet.name ? formatName(wallet.name) : chalk.gray('(none)')],
-        ['Tags', wallet.tags?.length ? formatTags(wallet.tags) : chalk.gray('(none)')]
-      );
-
-      console.log(table.toString());
+      console.log(`${chalk.bold('Public Key:')}  ${formatAddress(wallet.publicKey)}`);
+      if (wallet.name) {
+        console.log(`${chalk.bold('Name:')}       ${formatName(wallet.name)}`);
+      }
+      if (wallet.tags?.length) {
+        console.log(`${chalk.bold('Tags:')}       ${formatTags(wallet.tags)}`);
+      }
+      console.log(`${chalk.bold('Storage:')}    ${chalk.gray(path.join(walletService.getBasePath(), 'accounts'))}`);
       console.log(formatSuccess('\nWallet has been encrypted and saved'));
     } catch (error: any) {
       console.error(formatError('Error importing wallet:'), error?.message || error);

@@ -13,6 +13,8 @@ import {
   getAccount,
   getAssociatedTokenAddress,
 } from '@solana/spl-token';
+import { AccountLayout } from '@solana/spl-token';
+import { ParsedAccountData } from '@solana/web3.js';
 
 export interface TokenBalance {
   mint: string;
@@ -157,32 +159,67 @@ export class TokenService {
     }
   }
 
-  async getWalletBalances(walletAddresses: string[]): Promise<Map<string, WalletBalance>> {
+  public async getWalletBalances(walletAddresses: string[]): Promise<Map<string, WalletBalance>> {
+    const balances = new Map<string, WalletBalance>();
+    
     try {
-      // Convert addresses to PublicKeys
-      const pubkeys = walletAddresses.map(addr => new PublicKey(addr));
+      // Get all SOL balances in one request
+      const publicKeys = walletAddresses.map(addr => new PublicKey(addr));
+      const solBalances = await this.connection.getMultipleAccountsInfo(publicKeys);
       
-      // Batch request SOL balances
-      const solBalances = await this.connection.getMultipleAccountsInfo(pubkeys);
-      
-      // Get token accounts for all wallets in parallel
-      const tokenAccountsPromises = walletAddresses.map(addr => this.getTokenAccounts(addr));
-      const tokenAccounts = await Promise.all(tokenAccountsPromises);
-      
-      // Combine results
-      const balanceMap = new Map<string, WalletBalance>();
-      
-      walletAddresses.forEach((addr, index) => {
-        balanceMap.set(addr, {
-          solBalance: (solBalances[index]?.lamports ?? 0) / LAMPORTS_PER_SOL,
-          tokens: tokenAccounts[index],
+      // Get all token accounts for these wallets in one request
+      const tokenAccounts = await this.connection.getProgramAccounts(
+        TOKEN_PROGRAM_ID,
+        {
+          filters: [
+            {
+              memcmp: {
+                offset: 32, // Owner offset in token account data
+                bytes: publicKeys.map(pk => pk.toBase58()).join(','),
+              },
+            },
+            {
+              dataSize: 165, // Size of token account data
+            },
+          ],
+        }
+      );
+
+      // Process SOL balances
+      solBalances.forEach((account, index) => {
+        const address = walletAddresses[index];
+        balances.set(address, {
+          solBalance: (account?.lamports || 0) / LAMPORTS_PER_SOL,
+          tokens: []
         });
       });
-      
-      return balanceMap;
+
+      // Process token accounts
+      for (const account of tokenAccounts) {
+        const tokenAccountInfo = AccountLayout.decode(account.account.data);
+        const tokenBalance = Number(tokenAccountInfo.amount);
+        const tokenMint = new PublicKey(tokenAccountInfo.mint).toString();
+        const owner = new PublicKey(tokenAccountInfo.owner).toString();
+        
+        // Get token decimals (we might want to cache this in the future)
+        const mintInfo = await this.connection.getParsedAccountInfo(new PublicKey(tokenMint));
+        const decimals = (mintInfo.value?.data as ParsedAccountData)?.parsed?.info?.decimals || 0;
+        
+        const walletBalance = balances.get(owner);
+        if (walletBalance) {
+          walletBalance.tokens.push({
+            mint: tokenMint,
+            balance: tokenBalance,
+            decimals,
+            uiAmount: tokenBalance / Math.pow(10, decimals)
+          });
+        }
+      }
+
+      return balances;
     } catch (error) {
-      console.error('Error getting wallet balances:', error);
-      return new Map();
+      console.error('Error fetching balances:', error);
+      throw error;
     }
   }
 
