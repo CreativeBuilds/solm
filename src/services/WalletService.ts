@@ -4,6 +4,7 @@ import * as path from 'path';
 import { encrypt, decrypt } from '../utils/encryption';
 import bs58 from 'bs58';
 import { randomBytes } from 'crypto';
+import * as os from 'os';
 
 export interface WalletInfo {
   publicKey: string;
@@ -41,11 +42,28 @@ export class WalletService {
   private readonly NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9-_]*[a-zA-Z0-9]$/;
   private walletMap: WalletMap;
 
-  constructor(baseDir: string = '.solm') {
-    this.baseDir = baseDir;
-    this.accountsDir = path.join(baseDir, 'accounts');
-    this.mapFile = path.join(baseDir, 'wallets.json');
-    this.backupDir = path.join(baseDir, 'backups');
+  public static getDefaultPath(): string {
+    // Use platform-specific default paths
+    switch (process.platform) {
+      case 'darwin':
+        return path.join(os.homedir(), 'Library', 'Application Support', '.solm');
+      case 'win32':
+        return path.join(os.homedir(), 'AppData', 'Local', '.solm');
+      default: // Linux and others
+        return path.join(os.homedir(), '.config', '.solm');
+    }
+  }
+
+  public static resolvePath(customPath?: string): string {
+    // Priority: customPath > SOLM_PATH env var > default path
+    return customPath || process.env.SOLM_PATH || WalletService.getDefaultPath();
+  }
+
+  constructor(customPath?: string) {
+    this.baseDir = WalletService.resolvePath(customPath);
+    this.accountsDir = path.join(this.baseDir, 'accounts');
+    this.mapFile = path.join(this.baseDir, 'wallets.json');
+    this.backupDir = path.join(this.baseDir, 'backups');
     this.passwordCache = new Map();
     this.walletMap = { 
       version: this.CURRENT_VERSION, 

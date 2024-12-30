@@ -7,8 +7,6 @@ import chalk from 'chalk';
 import Table from 'cli-table3';
 
 const program = new Command();
-const walletService = new WalletService();
-const tokenService = new TokenService();
 
 // Formatting helpers
 const formatAmount = (amount: number, decimals: number = 4) => amount.toFixed(decimals);
@@ -65,24 +63,25 @@ async function promptNewPassword(walletName?: string): Promise<string> {
   return password;
 }
 
-async function promptWalletPassword(walletName?: string): Promise<string> {
-  const message = walletName 
-    ? `Enter password for wallet "${walletName}":`
-    : 'Enter wallet password:';
-
-  const { password } = await inquirer.prompt<PasswordPrompt>({
-    type: 'password',
-    name: 'password',
-    message,
-    validate: (input: string) => input.length >= 8 || 'Password must be at least 8 characters',
-  });
-  return password;
-}
-
 program
   .name('solm')
   .description('CLI tool for managing multiple Solana wallets and SPL tokens')
-  .version('1.0.0');
+  .version('1.0.0')
+  .option('-p, --path <path>', 'Custom path for wallet storage')
+  .hook('preAction', (thisCommand) => {
+    // Get the path from command line or environment
+    const customPath = thisCommand.opts().path;
+    
+    // Create new service instances with the resolved path
+    global.walletService = new WalletService(customPath);
+    global.tokenService = new TokenService();
+  });
+
+// Add type declaration for global services
+declare global {
+  var walletService: WalletService;
+  var tokenService: TokenService;
+}
 
 // Create a wallet command group
 const walletCommand = program
@@ -510,6 +509,12 @@ ${formatHeader('Notes:')}
 program.addHelpText('after', `
 ${formatHeader('Environment Variables:')}
   ${chalk.cyan('NODE_NO_WARNINGS=1')}     ${chalk.gray('Suppress Node.js warnings')}
+  ${chalk.cyan('SOLM_PATH')}              ${chalk.gray('Custom path for wallet storage')}
+
+${formatHeader('Storage Location:')}
+  ${chalk.gray('•')} Default: ${chalk.yellow(WalletService.getDefaultPath())}
+  ${chalk.gray('•')} Override with ${chalk.cyan('SOLM_PATH')} environment variable
+  ${chalk.gray('•')} Override with ${chalk.cyan('--path')} option
 
 ${formatHeader('Examples:')}
   ${chalk.bold('# Generate a new wallet')}
@@ -523,6 +528,9 @@ ${formatHeader('Examples:')}
 
   ${chalk.bold('# Spread tokens')}
   ${chalk.gray('$')} ${chalk.green('solm')} spread --from <WALLET> --amount 1000 --count 100 --token <MINT>
+
+  ${chalk.bold('# Use custom storage path')}
+  ${chalk.gray('$')} ${chalk.green('solm')} --path ~/my-wallets wallet list
 
 ${formatHeader('For more info:')}
 Run any command with the ${chalk.yellow('--help')} flag
