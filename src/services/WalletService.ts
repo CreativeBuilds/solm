@@ -302,4 +302,11 @@ export class WalletService {
     const walletPath = path.join(this.accountsDir, `${walletInfo.publicKey}.json`);
     await fs.writeFile(walletPath, JSON.stringify(walletInfo, null, 2));
   }
+
+  public async renameWallet(publicKey: string, newName: string | undefined): Promise<WalletInfo> {
+    const wallet = await this.getWallet(publicKey);
+    wallet.name = newName;
+    await this.saveWallet(wallet);
+    return wallet;
+  }
 } 

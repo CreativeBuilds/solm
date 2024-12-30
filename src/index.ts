@@ -295,6 +295,36 @@ ${formatHeader('Note:')}
   ${chalk.gray('•')} Use this to fix any index conflicts or missing indices
   `);
 
+walletCommand
+  .command('name')
+  .description('Set or clear the name of a wallet')
+  .requiredOption('--wallet <address>', 'Wallet address to rename')
+  .option('-n, --name <name>', 'New name for the wallet (omit to clear the name)')
+  .action(async (options) => {
+    try {
+      const wallet = await walletService.renameWallet(options.wallet, options.name);
+      
+      console.log(formatHeader('\nWallet Renamed'));
+      const table = createTable(['Field', 'Value']);
+      
+      table.push(
+        ['Public Key', formatAddress(wallet.publicKey)],
+        ['Name', wallet.name ? formatName(wallet.name) : chalk.gray('(none)')],
+        ['Tags', wallet.tags?.length ? formatTags(wallet.tags) : chalk.gray('(none)')]
+      );
+
+      console.log(table.toString());
+      console.log(formatSuccess('\nWallet name has been updated'));
+    } catch (error: any) {
+      console.error(formatError('Error renaming wallet:'), error?.message || error);
+    }
+  })
+  .addHelpText('after', `
+${formatHeader('Examples:')}
+  ${chalk.gray('$')} ${chalk.green('solm')} wallet name --wallet <ADDRESS> -n "hot-wallet"    ${chalk.gray('# Set wallet name')}
+  ${chalk.gray('$')} ${chalk.green('solm')} wallet name --wallet <ADDRESS>                    ${chalk.gray('# Clear wallet name')}
+  `);
+
 program
   .command('send')
   .description('Send SOL or SPL tokens to another wallet')
