@@ -29,7 +29,7 @@ export interface WalletBalance {
 export interface DepositAddressInfo {
   address: string;
   exists: boolean;
-  rent: number;
+  requiredRent: number;
 }
 
 export class TokenService {
@@ -204,7 +204,7 @@ export class TokenService {
       return {
         address: ata.toString(),
         exists,
-        rent: exists ? 0 : await this.connection.getMinimumBalanceForRentExemption(165) // 165 is the size of a token account
+        requiredRent: exists ? 0 : await this.connection.getMinimumBalanceForRentExemption(165) // 165 is the size of a token account
       };
     } catch (error) {
       console.error('Error getting deposit address:', error);
