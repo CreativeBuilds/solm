@@ -11,6 +11,7 @@ import {
   Transaction,
   PublicKey,
 } from '@solana/web3.js';
+import { randomBytes } from 'crypto';
 
 const program = new Command();
 const walletService = new WalletService();
@@ -251,6 +252,32 @@ balanceCommand
     }
   });
 
+// Add this helper function for generating random distributions
+function generateRandomDistribution(count: number, total: number, variance: number): number[] {
+  // Generate random numbers from normal distribution
+  const generateGaussian = () => {
+    // Box-Muller transform for normal distribution
+    const u1 = Math.random();
+    const u2 = Math.random();
+    const z = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
+    return z;
+  };
+
+  // Generate initial random values
+  const values = Array.from({ length: count }, () => {
+    const base = total / count;
+    const randomFactor = generateGaussian() * variance;
+    return Math.max(base * (1 + randomFactor), base * 0.1); // Ensure minimum 10% of base
+  });
+
+  // Calculate the sum and adjust to match total
+  const sum = values.reduce((a, b) => a + b, 0);
+  const scaleFactor = total / sum;
+  
+  // Scale all values to match the desired total
+  return values.map(v => v * scaleFactor);
+}
+
 program
   .command('spread')
   .description('Spread SOL or SPL tokens from one wallet to multiple wallets, generating new ones if needed')
@@ -259,6 +286,7 @@ program
   .requiredOption('--count <number>', 'Number of wallets to spread to')
   .option('--token <address>', 'Token mint address (if spreading SPL tokens)')
   .option('--prefix <string>', 'Name prefix for generated wallets', 'wallet')
+  .option('--variance <number>', 'Variance factor (0-1, where 0 means equal distribution and 1 means high variance)', '0')
   .action(async (options) => {
     try {
       const sourceWallet = await walletService.getWallet(options.from);
@@ -267,6 +295,7 @@ program
 
       const totalAmount = parseFloat(options.amount);
       const targetCount = parseInt(options.count);
+      const variance = Math.max(0, Math.min(1, parseFloat(options.variance))); // Clamp between 0 and 1
       const isSPLTransfer = !!options.token;
       
       // Get existing wallets excluding source wallet
@@ -276,21 +305,54 @@ program
       // Calculate how many new wallets we need
       const walletsNeeded = Math.max(0, targetCount - existingWallets.length);
       const totalWalletsAfterGeneration = existingWallets.length + walletsNeeded;
-      
-      // Calculate amount per wallet based on total recipients (excluding source)
-      const amountPerWallet = totalAmount / totalWalletsAfterGeneration;
+
+      // Generate distribution based on variance
+      const individualAmounts = generateRandomDistribution(
+        totalWalletsAfterGeneration,
+        totalAmount * (isSPLTransfer ? 1 : LAMPORTS_PER_SOL),
+        variance
+      );
 
       // Check minimum amounts
       if (isSPLTransfer) {
-        console.log(`\nSpreading ${totalAmount} tokens of ${options.token} across ${totalWalletsAfterGeneration} wallets (${amountPerWallet} tokens each)`);
+        console.log(`\nSpreading ${totalAmount} tokens of ${options.token} across ${totalWalletsAfterGeneration} wallets with ${variance * 100}% variance`);
       } else {
-        if (amountPerWallet * LAMPORTS_PER_SOL < 0.001 * LAMPORTS_PER_SOL) {
-          console.error('Amount per wallet is too small. Minimum is 0.001 SOL');
+        const minAmount = Math.min(...individualAmounts) / LAMPORTS_PER_SOL;
+        if (minAmount < 0.001) {
+          console.error('Some amounts are too small. Minimum is 0.001 SOL');
           return;
         }
-        console.log(`\nSpreading ${totalAmount} SOL across ${totalWalletsAfterGeneration} wallets (${amountPerWallet} SOL each)`);
+        console.log(`\nSpreading ${totalAmount} SOL across ${totalWalletsAfterGeneration} wallets with ${variance * 100}% variance`);
       }
+
+      // Log distribution statistics
+      const minAmount = isSPLTransfer ? Math.min(...individualAmounts) : Math.min(...individualAmounts) / LAMPORTS_PER_SOL;
+      const maxAmount = isSPLTransfer ? Math.max(...individualAmounts) : Math.max(...individualAmounts) / LAMPORTS_PER_SOL;
+      const avgAmount = isSPLTransfer ? totalAmount / totalWalletsAfterGeneration : totalAmount / totalWalletsAfterGeneration;
+      
+      console.log('\nDistribution Summary:');
       console.log(`Source wallet: ${sourceWallet.name || sourceWallet.publicKey}`);
+      console.log(`Total amount: ${totalAmount}${isSPLTransfer ? ' tokens' : ' SOL'}`);
+      console.log(`Number of destination wallets: ${totalWalletsAfterGeneration}`);
+      console.log(`New wallets to be created: ${walletsNeeded}`);
+      console.log(`Distribution range: ${minAmount.toFixed(4)} to ${maxAmount.toFixed(4)} (avg: ${avgAmount.toFixed(4)})`);
+      console.log(`Variance factor: ${(variance * 100).toFixed(1)}%`);
+      
+      // Ask for confirmation
+      const { confirm } = await inquirer.prompt([
+        {
+          type: 'confirm',
+          name: 'confirm',
+          message: `\nThis operation will ${walletsNeeded > 0 ? `create ${walletsNeeded} new wallets and ` : ''}distribute ${totalAmount}${isSPLTransfer ? ' tokens' : ' SOL'} across ${totalWalletsAfterGeneration} wallets. Continue?`,
+          default: false,
+        },
+      ]);
+
+      if (!confirm) {
+        console.log('Operation cancelled by user');
+        walletService.clearPasswordForWallet(options.from);
+        return;
+      }
       
       // Generate new wallets if needed
       if (walletsNeeded > 0) {
@@ -318,7 +380,8 @@ program
 
       for (let i = 0; i < destinationWallets.length; i += batchSize) {
         const batch = destinationWallets.slice(i, Math.min(i + batchSize, destinationWallets.length));
-        const transferPromises = batch.map(async (wallet) => {
+        const transferPromises = batch.map(async (wallet, batchIndex) => {
+          const amount = individualAmounts[i + batchIndex];
           try {
             if (isSPLTransfer) {
               // For SPL tokens, use the TokenService transfer method
@@ -326,25 +389,25 @@ program
                 sourceKeypair,
                 wallet.publicKey,
                 options.token,
-                Math.floor(amountPerWallet)
+                Math.floor(amount)
               );
-              return { wallet, success: true, signature, isSPL: true };
+              return { wallet, amount, success: true, signature, isSPL: true };
             } else {
               // For SOL, use SystemProgram transfer
               const transaction = new Transaction().add(
                 SystemProgram.transfer({
                   fromPubkey: sourceKeypair.publicKey,
                   toPubkey: new PublicKey(wallet.publicKey),
-                  lamports: Math.floor(amountPerWallet * LAMPORTS_PER_SOL),
+                  lamports: Math.floor(amount),
                 })
               );
 
               const signature = await connection.sendTransaction(transaction, [sourceKeypair]);
               await connection.confirmTransaction(signature);
-              return { wallet, success: true, signature, isSPL: false };
+              return { wallet, amount, success: true, signature, isSPL: false };
             }
           } catch (error) {
-            return { wallet, success: false, error, isSPL: isSPLTransfer };
+            return { wallet, amount, success: false, error, isSPL: isSPLTransfer };
           }
         });
 
@@ -353,8 +416,8 @@ program
         // Log results for this batch
         results.forEach(result => {
           if (result.success) {
-            const amount = result.isSPL ? amountPerWallet : `${amountPerWallet} SOL`;
-            console.log(`✓ Sent ${amount} to ${result.wallet.name || result.wallet.publicKey}`);
+            const displayAmount = result.isSPL ? result.amount : `${(result.amount / LAMPORTS_PER_SOL).toFixed(4)} SOL`;
+            console.log(`✓ Sent ${displayAmount} to ${result.wallet.name || result.wallet.publicKey}`);
           } else {
             console.error(`✗ Failed to send to ${result.wallet.name || result.wallet.publicKey}: ${result.error}`);
           }
