@@ -94,6 +94,27 @@ walletCommand
   .command('generate')
   .description('Generate a new Solana wallet')
   .option('-n, --name <name>', 'Optional name for the wallet')
+  .action(async (options) => {
+    try {
+      const name = options.name || undefined;
+      const password = await promptNewPassword(name);
+      const wallet = await walletService.generateWallet(name, password);
+      
+      console.log(formatHeader('\nWallet Generated'));
+      const table = createTable(['Field', 'Value']);
+      
+      table.push(
+        ['Public Key', formatAddress(wallet.publicKey)],
+        ['Name', wallet.name ? formatName(wallet.name) : chalk.gray('(none)')],
+        ['Tags', wallet.tags?.length ? formatTags(wallet.tags) : chalk.gray('(none)')]
+      );
+
+      console.log(table.toString());
+      console.log(formatSuccess('\nWallet has been encrypted and saved'));
+    } catch (error: any) {
+      console.error(formatError('Error generating wallet:'), error?.message || error);
+    }
+  })
   .addHelpText('after', `
 ${formatHeader('Examples:')}
   ${chalk.gray('$')} ${chalk.green('solm')} wallet generate                    ${chalk.gray('# Generate a wallet with auto-generated name')}
@@ -104,6 +125,39 @@ walletCommand
   .command('import-seed')
   .description('Import a wallet from base58 encoded seed phrase')
   .option('-n, --name <name>', 'Optional name for the wallet')
+  .action(async (options) => {
+    try {
+      const name = options.name || undefined;
+      
+      // Prompt for seed phrase
+      const { seedPhrase } = await inquirer.prompt({
+        type: 'password',
+        name: 'seedPhrase',
+        message: 'Enter the base58 encoded seed phrase:',
+        validate: (input: string) => input.length > 0 || 'Seed phrase is required',
+      });
+
+      // Prompt for encryption password
+      const password = await promptNewPassword(name);
+      
+      // Import the wallet
+      const wallet = await walletService.importWallet(name, password, seedPhrase);
+      
+      console.log(formatHeader('\nWallet Imported'));
+      const table = createTable(['Field', 'Value']);
+      
+      table.push(
+        ['Public Key', formatAddress(wallet.publicKey)],
+        ['Name', wallet.name ? formatName(wallet.name) : chalk.gray('(none)')],
+        ['Tags', wallet.tags?.length ? formatTags(wallet.tags) : chalk.gray('(none)')]
+      );
+
+      console.log(table.toString());
+      console.log(formatSuccess('\nWallet has been encrypted and saved'));
+    } catch (error: any) {
+      console.error(formatError('Error importing wallet:'), error?.message || error);
+    }
+  })
   .addHelpText('after', `
 ${formatHeader('Examples:')}
   ${chalk.gray('$')} ${chalk.green('solm')} wallet import-seed                 ${chalk.gray('# Import wallet and prompt for seed phrase')}
@@ -174,10 +228,11 @@ walletCommand
       }
 
       console.log(formatHeader('\nWallet List'));
-      const table = createTable(['Public Key', 'Name', 'Tags']);
+      const table = createTable(['#', 'Public Key', 'Name', 'Tags']);
       
       wallets.forEach(wallet => {
         table.push([
+          chalk.yellow(wallet.index.toString()),
           formatAddress(wallet.publicKey),
           wallet.name ? formatName(wallet.name) : '',
           wallet.tags?.length ? formatTags(wallet.tags) : ''
@@ -234,7 +289,7 @@ balanceCommand
       const balances = await tokenService.getWalletBalances(walletAddresses);
       
       console.log(formatHeader('\nWallet Balances'));
-      const table = createTable(['Wallet', 'SOL Balance', 'Token Balances']);
+      const table = createTable(['#', 'Wallet', 'SOL Balance', 'Token Balances']);
       
       wallets.forEach(wallet => {
         const balance = balances.get(wallet.publicKey);
@@ -246,13 +301,19 @@ balanceCommand
           ].filter(Boolean).join('');
 
           if (balance.tokens.length === 0) {
-            table.push([walletInfo, formatSOL(balance.solBalance), 'No tokens']);
+            table.push([
+              chalk.yellow(wallet.index.toString()),
+              walletInfo,
+              formatSOL(balance.solBalance),
+              'No tokens'
+            ]);
           } else {
             // For wallets with tokens, create rows with empty cells for wallet and SOL balance
             balance.tokens.forEach((token, index) => {
               if (index === 0) {
                 // First token row includes wallet info and SOL balance
                 table.push([
+                  chalk.yellow(wallet.index.toString()),
                   walletInfo,
                   formatSOL(balance.solBalance),
                   `${formatAmount(token.uiAmount, token.decimals)} (${formatAddress(token.mint)})`
@@ -260,6 +321,7 @@ balanceCommand
               } else {
                 // Subsequent token rows have empty cells for wallet and SOL balance
                 table.push([
+                  '',
                   '',
                   '',
                   `${formatAmount(token.uiAmount, token.decimals)} (${formatAddress(token.mint)})`
