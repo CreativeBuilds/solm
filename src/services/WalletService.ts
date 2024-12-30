@@ -9,11 +9,13 @@ export interface WalletInfo {
   encryptedPrivateKey: string;
   name?: string;
   tags?: string[];
+  // Add a salt per wallet for additional security
+  salt: string;
 }
 
 export class WalletService {
   private readonly accountsDir = '.accounts';
-  private password: string | null = null;
+  private passwordCache: Map<string, string> = new Map();
 
   constructor() {
     this.ensureAccountsDir();
@@ -28,36 +30,40 @@ export class WalletService {
     }
   }
 
-  public setPassword(password: string) {
-    this.password = password;
+  private generateSalt(): string {
+    return bs58.encode(Buffer.from(Array.from({ length: 32 }, () => Math.floor(Math.random() * 256))));
   }
 
-  public async generateWallet(name?: string): Promise<WalletInfo> {
-    if (!this.password) {
-      throw new Error('Password not set');
-    }
+  public setPasswordForWallet(publicKey: string, password: string) {
+    this.passwordCache.set(publicKey, password);
+  }
 
+  public clearPasswordForWallet(publicKey: string) {
+    this.passwordCache.delete(publicKey);
+  }
+
+  public async generateWallet(password: string, name?: string): Promise<WalletInfo> {
     const keypair = Keypair.generate();
+    const salt = this.generateSalt();
     const walletInfo: WalletInfo = {
       publicKey: keypair.publicKey.toString(),
-      encryptedPrivateKey: encrypt(bs58.encode(keypair.secretKey), this.password),
+      encryptedPrivateKey: encrypt(bs58.encode(keypair.secretKey), password + salt),
       name,
+      salt,
     };
 
     await this.saveWallet(walletInfo);
     return walletInfo;
   }
 
-  public async importWallet(secretKey: Uint8Array, name?: string): Promise<WalletInfo> {
-    if (!this.password) {
-      throw new Error('Password not set');
-    }
-
+  public async importWallet(secretKey: Uint8Array, password: string, name?: string): Promise<WalletInfo> {
     const keypair = Keypair.fromSecretKey(secretKey);
+    const salt = this.generateSalt();
     const walletInfo: WalletInfo = {
       publicKey: keypair.publicKey.toString(),
-      encryptedPrivateKey: encrypt(bs58.encode(keypair.secretKey), this.password),
+      encryptedPrivateKey: encrypt(bs58.encode(keypair.secretKey), password + salt),
       name,
+      salt,
     };
 
     await this.saveWallet(walletInfo);
@@ -74,7 +80,7 @@ export class WalletService {
     }
   }
 
-  public async listWallets(): Promise<WalletInfo[]> {
+  public async listWallets(): Promise<Omit<WalletInfo, 'encryptedPrivateKey' | 'salt'>[]> {
     try {
       const files = await fs.readdir(this.accountsDir);
       const wallets = await Promise.all(
@@ -82,7 +88,13 @@ export class WalletService {
           .filter(file => file.endsWith('.json'))
           .map(async file => {
             const data = await fs.readFile(path.join(this.accountsDir, file), 'utf-8');
-            return JSON.parse(data);
+            const wallet = JSON.parse(data);
+            // Only return public information
+            return {
+              publicKey: wallet.publicKey,
+              name: wallet.name,
+              tags: wallet.tags,
+            };
           })
       );
       return wallets;
@@ -93,13 +105,19 @@ export class WalletService {
   }
 
   public async getKeypair(publicKey: string): Promise<Keypair> {
-    if (!this.password) {
-      throw new Error('Password not set');
+    const walletInfo = await this.getWallet(publicKey);
+    const password = this.passwordCache.get(publicKey);
+    
+    if (!password) {
+      throw new Error('Password not set for this wallet. Please unlock it first.');
     }
 
-    const walletInfo = await this.getWallet(publicKey);
-    const privateKeyBytes = bs58.decode(decrypt(walletInfo.encryptedPrivateKey, this.password));
-    return Keypair.fromSecretKey(privateKeyBytes);
+    try {
+      const privateKeyBytes = bs58.decode(decrypt(walletInfo.encryptedPrivateKey, password + walletInfo.salt));
+      return Keypair.fromSecretKey(privateKeyBytes);
+    } catch (error) {
+      throw new Error('Invalid password for wallet');
+    }
   }
 
   private async saveWallet(walletInfo: WalletInfo): Promise<void> {

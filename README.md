@@ -46,8 +46,10 @@ solm send --from <WALLET_ADDRESS> --to <RECIPIENT_ADDRESS> --amount <AMOUNT> --t
 # List all wallets
 solm wallet list
 
-# Get wallet balance
-solm balance <WALLET_ADDRESS>
+# Get balance commands
+solm balance <WALLET_ADDRESS>  # Get balance for a specific wallet
+solm balance list             # List balances for all wallets
+solm balance list --token <TOKEN_ADDRESS>  # List balances for a specific token
 ```
 
 ## Security

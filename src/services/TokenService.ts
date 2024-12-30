@@ -4,19 +4,37 @@ import {
   Transaction,
   sendAndConfirmTransaction,
   Keypair,
+  LAMPORTS_PER_SOL,
 } from '@solana/web3.js';
 import {
   TOKEN_PROGRAM_ID,
   createTransferInstruction,
   getOrCreateAssociatedTokenAccount,
   getAccount,
+  getAssociatedTokenAddress,
 } from '@solana/spl-token';
+
+export interface TokenBalance {
+  mint: string;
+  balance: number;
+}
+
+export interface WalletBalance {
+  solBalance: number;
+  tokens: TokenBalance[];
+}
 
 export class TokenService {
   private connection: Connection;
+  private endpoint: string;
 
   constructor(endpoint: string = 'https://api.mainnet-beta.solana.com') {
+    this.endpoint = endpoint;
     this.connection = new Connection(endpoint, 'confirmed');
+  }
+
+  public getEndpoint(): string {
+    return this.endpoint;
   }
 
   async getTokenBalance(walletAddress: string, tokenMint: string): Promise<number> {
@@ -49,20 +67,38 @@ export class TokenService {
       const mintPubkey = new PublicKey(tokenMint);
       const destinationPubkey = new PublicKey(toAddress);
 
-      // Get the token accounts for both wallets
+      // Get or create the source token account
       const sourceTokenAccount = await getOrCreateAssociatedTokenAccount(
         this.connection,
-        fromWallet,
+        fromWallet, // payer for any account creation
         mintPubkey,
         fromWallet.publicKey
       );
 
-      const destinationTokenAccount = await getOrCreateAssociatedTokenAccount(
-        this.connection,
-        fromWallet,
+      // Check if destination token account exists before creation
+      const destinationATA = await getAssociatedTokenAddress(
         mintPubkey,
         destinationPubkey
       );
+      
+      const destinationAccountBefore = await this.connection.getAccountInfo(destinationATA);
+
+      // Get or create the destination token account
+      // Note: fromWallet is the payer for creating the recipient's token account if needed
+      const destinationTokenAccount = await getOrCreateAssociatedTokenAccount(
+        this.connection,
+        fromWallet, // payer for account creation (sender pays the rent)
+        mintPubkey,
+        destinationPubkey,
+      );
+
+      console.log(`Using source token account: ${sourceTokenAccount.address.toString()}`);
+      console.log(`Using destination token account: ${destinationTokenAccount.address.toString()}`);
+      
+      // If the account didn't exist before but exists now, it was just created
+      if (!destinationAccountBefore) {
+        console.log('Created new Associated Token Account for recipient');
+      }
 
       // Create transfer instruction
       const transferInstruction = createTransferInstruction(
@@ -89,7 +125,7 @@ export class TokenService {
     }
   }
 
-  async getTokenAccounts(walletAddress: string): Promise<Array<{ mint: string; balance: number }>> {
+  async getTokenAccounts(walletAddress: string): Promise<TokenBalance[]> {
     try {
       const walletPubkey = new PublicKey(walletAddress);
       const accounts = await this.connection.getParsedTokenAccountsByOwner(walletPubkey, {
@@ -103,6 +139,35 @@ export class TokenService {
     } catch (error) {
       console.error('Error getting token accounts:', error);
       return [];
+    }
+  }
+
+  async getWalletBalances(walletAddresses: string[]): Promise<Map<string, WalletBalance>> {
+    try {
+      // Convert addresses to PublicKeys
+      const pubkeys = walletAddresses.map(addr => new PublicKey(addr));
+      
+      // Batch request SOL balances
+      const solBalances = await this.connection.getMultipleAccountsInfo(pubkeys);
+      
+      // Get token accounts for all wallets in parallel
+      const tokenAccountsPromises = walletAddresses.map(addr => this.getTokenAccounts(addr));
+      const tokenAccounts = await Promise.all(tokenAccountsPromises);
+      
+      // Combine results
+      const balanceMap = new Map<string, WalletBalance>();
+      
+      walletAddresses.forEach((addr, index) => {
+        balanceMap.set(addr, {
+          solBalance: (solBalances[index]?.lamports ?? 0) / LAMPORTS_PER_SOL,
+          tokens: tokenAccounts[index],
+        });
+      });
+      
+      return balanceMap;
+    } catch (error) {
+      console.error('Error getting wallet balances:', error);
+      return new Map();
     }
   }
 } 
