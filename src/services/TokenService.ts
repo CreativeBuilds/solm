@@ -17,11 +17,19 @@ import {
 export interface TokenBalance {
   mint: string;
   balance: number;
+  decimals: number;
+  uiAmount: number;  // Amount formatted with decimals
 }
 
 export interface WalletBalance {
   solBalance: number;
   tokens: TokenBalance[];
+}
+
+export interface DepositAddressInfo {
+  address: string;
+  exists: boolean;
+  rent: number;
 }
 
 export class TokenService {
@@ -132,10 +140,17 @@ export class TokenService {
         programId: TOKEN_PROGRAM_ID,
       });
 
-      return accounts.value.map(account => ({
-        mint: account.account.data.parsed.info.mint,
-        balance: Number(account.account.data.parsed.info.tokenAmount.amount),
-      }));
+      return accounts.value.map(account => {
+        const info = account.account.data.parsed.info;
+        const decimals = info.tokenAmount.decimals;
+        const rawBalance = Number(info.tokenAmount.amount);
+        return {
+          mint: info.mint,
+          balance: rawBalance,
+          decimals,
+          uiAmount: rawBalance / Math.pow(10, decimals)
+        };
+      });
     } catch (error) {
       console.error('Error getting token accounts:', error);
       return [];
@@ -168,6 +183,32 @@ export class TokenService {
     } catch (error) {
       console.error('Error getting wallet balances:', error);
       return new Map();
+    }
+  }
+
+  async getDepositAddress(walletAddress: string, tokenMint: string): Promise<DepositAddressInfo> {
+    try {
+      const walletPubkey = new PublicKey(walletAddress);
+      const mintPubkey = new PublicKey(tokenMint);
+
+      // Get the associated token account address
+      const ata = await getAssociatedTokenAddress(
+        mintPubkey,
+        walletPubkey
+      );
+
+      // Check if the account exists
+      const account = await this.connection.getAccountInfo(ata);
+      const exists = account !== null;
+
+      return {
+        address: ata.toString(),
+        exists,
+        rent: exists ? 0 : await this.connection.getMinimumBalanceForRentExemption(165) // 165 is the size of a token account
+      };
+    } catch (error) {
+      console.error('Error getting deposit address:', error);
+      throw error;
     }
   }
 } 

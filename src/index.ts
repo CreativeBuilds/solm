@@ -20,20 +20,6 @@ interface PasswordPrompt {
   password: string;
 }
 
-interface NewPasswordPrompt {
-  password: string;
-  confirmPassword: string;
-}
-
-async function promptPassword(): Promise<string> {
-  const { password } = await inquirer.prompt<PasswordPrompt>({
-    type: 'password',
-    name: 'password',
-    message: 'Enter your password to unlock wallets:',
-    validate: (input: string) => input.length >= 8 || 'Password must be at least 8 characters',
-  });
-  return password;
-}
 
 async function promptNewPassword(walletName?: string): Promise<string> {
   const message = walletName 
@@ -233,7 +219,7 @@ balanceCommand
             console.log('Token Accounts:');
             balance.tokens.forEach(token => {
               console.log(`  Mint: ${token.mint}`);
-              console.log(`  Balance: ${token.balance}`);
+              console.log(`  Balance: ${token.uiAmount.toFixed(token.decimals)} (${token.decimals} decimals)`);
             });
           }
         }
@@ -265,7 +251,7 @@ balanceCommand
             console.log('\nToken Accounts:');
             balance.tokens.forEach(token => {
               console.log(`Mint: ${token.mint}`);
-              console.log(`Balance: ${token.balance}`);
+              console.log(`Balance: ${token.uiAmount.toFixed(token.decimals)} (${token.decimals} decimals)`);
             });
           }
         }
@@ -439,7 +425,9 @@ program
         // Log results for this batch
         results.forEach(result => {
           if (result.success) {
-            const displayAmount = result.isSPL ? result.amount : `${(result.amount / LAMPORTS_PER_SOL).toFixed(4)} SOL`;
+            const displayAmount = result.isSPL 
+              ? `${(result.amount / Math.pow(10, 9)).toFixed(9)} tokens`  // Assuming 9 decimals for SPL tokens
+              : `${(result.amount / LAMPORTS_PER_SOL).toFixed(4)} SOL`;
             console.log(`✓ Sent ${displayAmount} to ${result.wallet.name || result.wallet.publicKey}`);
           } else {
             console.error(`✗ Failed to send to ${result.wallet.name || result.wallet.publicKey}: ${result.error}`);
@@ -453,6 +441,40 @@ program
       console.log('\nSpread operation completed!');
     } catch (error) {
       console.error('Error spreading tokens:', error);
+    }
+  });
+
+program
+  .command('deposit')
+  .description('Get deposit address for a token')
+  .requiredOption('--wallet <address>', 'Wallet address to receive tokens')
+  .requiredOption('--token <address>', 'Token mint address')
+  .action(async (options) => {
+    try {
+      // First verify the wallet exists
+      const wallet = await walletService.getWallet(options.wallet);
+      console.log('\nGenerating deposit address...');
+      console.log(`Wallet: ${wallet.name || wallet.publicKey}`);
+      console.log(`Token: ${options.token}`);
+
+      const depositInfo = await tokenService.getDepositAddress(options.wallet, options.token);
+      
+      console.log('\nDeposit Information:');
+      console.log(`Address: ${depositInfo.address}`);
+      if (!depositInfo.exists) {
+        console.log(`Note: This token account doesn't exist yet. The first deposit will need to include ${depositInfo.rent / LAMPORTS_PER_SOL} SOL for rent.`);
+      } else {
+        console.log('Token account is already initialized and ready to receive tokens.');
+      }
+      
+      // Show QR code if requested (future enhancement)
+      
+    } catch (error: any) {
+      if (error?.message?.includes('Wallet not found')) {
+        console.error('Error: Wallet not found. Please check the address and try again.');
+      } else {
+        console.error('Error getting deposit address:', error?.message || error);
+      }
     }
   });
 
