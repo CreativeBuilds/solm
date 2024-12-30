@@ -12,7 +12,7 @@ export interface WalletInfo {
   salt: string;
   index: number;
   encryptedPrivateKey: string;
-  version?: number; // For migration support
+  version?: number;
 }
 
 export interface WalletListInfo {
@@ -22,14 +22,106 @@ export interface WalletListInfo {
   index: number;
 }
 
+interface WalletMap {
+  version: number;
+  wallets: {
+    [name: string]: string; // name -> publicKey mapping (stored in lowercase)
+  };
+}
+
 export class WalletService {
+  private baseDir: string;
   private accountsDir: string;
+  private mapFile: string;
+  private backupDir: string;
   private passwordCache: Map<string, string>;
   private readonly CURRENT_VERSION = 1;
+  private readonly NAME_MIN_LENGTH = 3;
+  private readonly NAME_MAX_LENGTH = 32;
+  private readonly NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9-_]*[a-zA-Z0-9]$/;
+  private walletMap: WalletMap;
 
-  constructor(accountsDir: string = '.accounts') {
-    this.accountsDir = accountsDir;
+  constructor(baseDir: string = '.solm') {
+    this.baseDir = baseDir;
+    this.accountsDir = path.join(baseDir, 'accounts');
+    this.mapFile = path.join(baseDir, 'wallets.json');
+    this.backupDir = path.join(baseDir, 'backups');
     this.passwordCache = new Map();
+    this.walletMap = { 
+      version: this.CURRENT_VERSION, 
+      wallets: {}
+    };
+  }
+
+  private normalizeName(name: string): string {
+    return name.toLowerCase().trim();
+  }
+
+  private validateNameFormat(name: string | undefined): void {
+    if (!name) return;
+
+    const normalizedName = this.normalizeName(name);
+    
+    if (normalizedName.length < this.NAME_MIN_LENGTH) {
+      throw new Error(`Name must be at least ${this.NAME_MIN_LENGTH} characters long`);
+    }
+    
+    if (normalizedName.length > this.NAME_MAX_LENGTH) {
+      throw new Error(`Name must be no more than ${this.NAME_MAX_LENGTH} characters long`);
+    }
+    
+    if (!this.NAME_PATTERN.test(normalizedName)) {
+      throw new Error(
+        'Name must start and end with a letter or number, and can only contain letters, numbers, hyphens, and underscores'
+      );
+    }
+  }
+
+  private async validateNameAvailability(name: string | undefined): Promise<void> {
+    if (!name) return;
+
+    const normalizedName = this.normalizeName(name);
+    await this.loadWalletMap();
+
+    // Check for existing wallet with this name (case-insensitive)
+    const existingAddress = this.walletMap.wallets[normalizedName];
+    if (existingAddress) {
+      throw new Error(`A wallet with the name "${name}" already exists`);
+    }
+  }
+
+  public async resolveWallet(nameOrAddress: string): Promise<string> {
+    await this.loadWalletMap();
+    
+    // Try case-insensitive name lookup first
+    const normalizedName = this.normalizeName(nameOrAddress);
+    if (this.walletMap.wallets[normalizedName]) {
+      return this.walletMap.wallets[normalizedName];
+    }
+
+    // If not found by name, check if it's a valid address
+    try {
+      await this.getWallet(nameOrAddress);
+      return nameOrAddress;
+    } catch (error) {
+      throw new Error(`No wallet found with name or address: ${nameOrAddress}`);
+    }
+  }
+
+  private async addToMap(name: string | undefined, publicKey: string): Promise<void> {
+    if (!name) return;
+    
+    const normalizedName = this.normalizeName(name);
+    await this.loadWalletMap();
+    this.walletMap.wallets[normalizedName] = publicKey;
+    await this.saveWalletMap();
+  }
+
+  private async removeFromMap(name: string): Promise<void> {
+    const normalizedName = this.normalizeName(name);
+    await this.loadWalletMap();
+    delete this.walletMap.wallets[normalizedName];
+    await this.saveWalletMap();
   }
 
   private generateSalt(): string {
@@ -77,6 +169,8 @@ export class WalletService {
    */
   public async reindexWallets(onProgress?: (current: number, total: number) => void): Promise<void> {
     try {
+      await this.ensureDirectories();
+      
       // Get all wallet files first
       const files = await fs.readdir(this.accountsDir);
       const jsonFiles = files.filter(file => file.endsWith('.json'));
@@ -132,6 +226,12 @@ export class WalletService {
   }
 
   public async generateWallet(name: string | undefined, password: string, tags?: string[]): Promise<WalletListInfo> {
+    await this.ensureDirectories();
+    if (name) {
+      this.validateNameFormat(name);
+      await this.validateNameAvailability(name);
+    }
+    
     const keypair = Keypair.generate();
     const salt = this.generateSalt();
     const index = await this.getNextIndex();
@@ -152,14 +252,16 @@ export class WalletService {
       version: this.CURRENT_VERSION
     };
 
-    // Ensure accounts directory exists
-    await fs.mkdir(this.accountsDir, { recursive: true });
-
     // Save wallet info
     await fs.writeFile(
       path.join(this.accountsDir, `${keypair.publicKey.toString()}.json`),
       JSON.stringify(walletInfo, null, 2)
     );
+
+    // Add to name mapping if name provided
+    if (name) {
+      await this.addToMap(name, walletInfo.publicKey);
+    }
 
     // Cache the password
     this.passwordCache.set(walletInfo.publicKey, password);
@@ -174,6 +276,12 @@ export class WalletService {
   }
 
   public async importWallet(name: string | undefined, password: string, seedPhrase: string, tags?: string[]): Promise<WalletListInfo> {
+    await this.ensureDirectories();
+    if (name) {
+      this.validateNameFormat(name);
+      await this.validateNameAvailability(name);
+    }
+    
     // Validate seed phrase before proceeding
     await this.validateSeedPhrase(seedPhrase);
     
@@ -194,11 +302,15 @@ export class WalletService {
       version: this.CURRENT_VERSION
     };
 
-    await fs.mkdir(this.accountsDir, { recursive: true });
     await fs.writeFile(
       path.join(this.accountsDir, `${keypair.publicKey.toString()}.json`),
       JSON.stringify(walletInfo, null, 2)
     );
+
+    // Add to name mapping if name provided
+    if (name) {
+      await this.addToMap(name, walletInfo.publicKey);
+    }
 
     this.passwordCache.set(walletInfo.publicKey, password);
 
@@ -212,7 +324,7 @@ export class WalletService {
 
   public async listWallets(filterTags?: string[]): Promise<WalletListInfo[]> {
     try {
-      await fs.mkdir(this.accountsDir, { recursive: true });
+      await this.ensureDirectories();
       const files = await fs.readdir(this.accountsDir);
       
       const wallets = await Promise.all(
@@ -248,17 +360,19 @@ export class WalletService {
     }
   }
 
-  public async getWallet(publicKey: string): Promise<WalletInfo> {
+  public async getWallet(nameOrAddress: string): Promise<WalletInfo> {
+    const publicKey = await this.resolveWallet(nameOrAddress);
     const walletPath = path.join(this.accountsDir, `${publicKey}.json`);
     try {
       const data = await fs.readFile(walletPath, 'utf-8');
       return JSON.parse(data);
     } catch (error) {
-      throw new Error(`Wallet not found: ${publicKey}`);
+      throw new Error(`Wallet not found: ${nameOrAddress}`);
     }
   }
 
-  public async getKeypair(publicKey: string): Promise<Keypair> {
+  public async getKeypair(nameOrAddress: string): Promise<Keypair> {
+    const publicKey = await this.resolveWallet(nameOrAddress);
     const walletInfo = await this.getWallet(publicKey);
     const password = this.passwordCache.get(publicKey);
     
@@ -274,7 +388,8 @@ export class WalletService {
     }
   }
 
-  public async addTags(publicKey: string, tags: string[]): Promise<WalletInfo> {
+  public async addTags(nameOrAddress: string, tags: string[]): Promise<WalletInfo> {
+    const publicKey = await this.resolveWallet(nameOrAddress);
     const wallet = await this.getWallet(publicKey);
     const uniqueTags = new Set(wallet.tags || []);
     tags.forEach(tag => uniqueTags.add(tag.trim().toLowerCase()));
@@ -283,7 +398,8 @@ export class WalletService {
     return wallet;
   }
 
-  public async removeTags(publicKey: string, tags: string[]): Promise<WalletInfo> {
+  public async removeTags(nameOrAddress: string, tags: string[]): Promise<WalletInfo> {
+    const publicKey = await this.resolveWallet(nameOrAddress);
     const wallet = await this.getWallet(publicKey);
     if (!wallet.tags) return wallet;
 
@@ -299,14 +415,58 @@ export class WalletService {
   }
 
   private async saveWallet(walletInfo: WalletInfo): Promise<void> {
+    await this.ensureDirectories();
     const walletPath = path.join(this.accountsDir, `${walletInfo.publicKey}.json`);
     await fs.writeFile(walletPath, JSON.stringify(walletInfo, null, 2));
   }
 
-  public async renameWallet(publicKey: string, newName: string | undefined): Promise<WalletInfo> {
+  public async renameWallet(nameOrAddress: string, newName: string | undefined): Promise<WalletInfo> {
+    const publicKey = await this.resolveWallet(nameOrAddress);
     const wallet = await this.getWallet(publicKey);
+    
+    // If wallet had an old name, remove it from map
+    if (wallet.name) {
+      await this.removeFromMap(wallet.name);
+    }
+    
+    // If new name provided, validate and add to map
+    if (newName) {
+      this.validateNameFormat(newName);
+      await this.validateNameAvailability(newName);
+      await this.addToMap(newName, publicKey);
+    }
+    
     wallet.name = newName;
     await this.saveWallet(wallet);
     return wallet;
+  }
+
+  private async ensureDirectories(): Promise<void> {
+    await fs.mkdir(this.baseDir, { recursive: true });
+    await fs.mkdir(this.accountsDir, { recursive: true });
+    await fs.mkdir(this.backupDir, { recursive: true });
+  }
+
+  private async loadWalletMap(): Promise<void> {
+    try {
+      const data = await fs.readFile(this.mapFile, 'utf-8');
+      this.walletMap = JSON.parse(data);
+      
+      // Simple version check
+      if (!this.walletMap.version) {
+        this.walletMap.version = this.CURRENT_VERSION;
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        // If file doesn't exist, use default empty map
+        this.walletMap = { version: this.CURRENT_VERSION, wallets: {} };
+      } else {
+        throw error;
+      }
+    }
+  }
+
+  private async saveWalletMap(): Promise<void> {
+    await fs.writeFile(this.mapFile, JSON.stringify(this.walletMap, null, 2));
   }
 } 
